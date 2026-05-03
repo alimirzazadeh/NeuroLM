@@ -98,7 +98,7 @@ if __name__ == '__main__':
 
     # Load checkpoint
     print(f"Loading {args.ckpt} ...")
-    ckpt = torch.load(args.ckpt, map_location=device)
+    ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
     model_args = ckpt['model_args']
     gptconf = GPTConfig(**model_args)
     neurolm = NeuroLM(gptconf, init_from='scratch')
