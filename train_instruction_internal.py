@@ -15,7 +15,8 @@ from torch.utils.tensorboard import SummaryWriter
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score, average_precision_score
 import tiktoken
 
-sys.path.insert(0, '/Users/alimirz/Research/EEG_FM/EEG_FM')
+# sys.path.insert(0, '/Users/alimirz/Research/EEG_FM/EEG_FM')
+sys.path.insert(0, '/home/alimirz/2026/EEG_FM/EEG_FM/')
 from data_split_scripts.probe_label_hunter import ProbeLabelHunterV3
 
 from model.model_neurolm import NeuroLM
