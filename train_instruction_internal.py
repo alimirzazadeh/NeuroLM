@@ -29,7 +29,7 @@ from utils import cosine_scheduler
 # Constants
 # ---------------------------------------------------------------------------
 
-EEG_DATA_DIR = '/orcd/compute/dinaktbi/001/2026/EEG_FM/data_EEG/preprocessed_eeg_v2'
+EEG_DATA_DIR = '/orcd/compute/dinaktbi/001/2026/EEG_FM/preprocessed_eeg_v2'
 
 # 19-channel order used by preprocessed_eeg_v2 (lowercase, as stored in H5)
 CHANNEL_ORDER = ['o1', 'o2', 't6', 'p4', 'pz', 'p3', 't5', 't3',
@@ -157,7 +157,7 @@ class InternalInstructDataset(Dataset):
         self._full_text_tokens: dict[tuple, torch.Tensor] = {}
         for task in self.tasks:
             for lbl in (0, 1):
-                ids = enc.encode(build_full_text(task, lbl))
+                ids = enc.encode(build_full_text(task, lbl), allowed_special={'<|endoftext|>'})
                 ids_t = torch.tensor(ids[:TEXT_MAX_LEN], dtype=torch.long)
                 self._full_text_tokens[(task, lbl)] = ids_t
 
@@ -485,7 +485,7 @@ def main(args):
     else:
         if master_process:
             print(f"Loading pretrained NeuroLM from {args.neurolm_path}")
-        checkpoint = torch.load(args.neurolm_path, map_location=device)
+        checkpoint = torch.load(args.neurolm_path, map_location=device, weights_only=False)
         for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
             model_args[k] = checkpoint['model_args'][k]
         gptconf = GPTConfig(**model_args)
