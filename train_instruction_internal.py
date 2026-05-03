@@ -555,6 +555,8 @@ def main(args):
         warmup_steps=int(args.warmup_ratio * num_steps * args.epochs),
     )
 
+    _enc = tiktoken.get_encoding("gpt2")
+
     X_text2, Y_text2 = get_batch('train')
     t0 = time.time()
 
@@ -617,6 +619,10 @@ def main(args):
                       f"instr={instr_loss:.4f}  text={text_loss:.4f}  "
                       f"acc={instr_acc:.3f}  lr={lr:.2e}  "
                       f"dt={(t1-t0)*1000:.0f}ms")
+                if args.verbose:
+                    sample_ids = X_text[0].cpu().tolist()
+                    sample_ids = [t for t in sample_ids if t != 50256]  # strip EOT padding
+                    print(f"  [sample] {_enc.decode(sample_ids)}")
                 writer.add_scalar('train/total_loss', instr_loss + text_loss, iter_num)
                 writer.add_scalar('train/instruction_loss', instr_loss, iter_num)
                 writer.add_scalar('train/text_loss', text_loss, iter_num)
@@ -687,6 +693,8 @@ def get_args():
     p.add_argument('--debug', default=False, action='store_true',
                    help='debug=True for ProbeLabelHunterV3 (fewer tasks/files)')
     p.add_argument('--log_interval', default=10, type=int)
+    p.add_argument('--verbose', default=False, action='store_true',
+                   help='Print a decoded sample question at each log interval')
     # Training
     p.add_argument('--gradient_accumulation_steps', default=1, type=int)
     p.add_argument('--eeg_batch_size', default=32, type=int)
