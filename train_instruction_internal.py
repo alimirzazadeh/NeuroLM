@@ -580,8 +580,8 @@ def main(args):
 
             iter_num += 1
 
-        # Checkpoint
-        if master_process:
+        # Checkpoint (only on final epoch if --save_checkpoint is set)
+        if master_process and args.save_checkpoint and epoch == args.epochs - 1:
             ckpt = {
                 'model': raw_model.state_dict(),
                 'optimizer': optimizer.state_dict(),
@@ -590,9 +590,7 @@ def main(args):
                 'epoch': epoch,
             }
             torch.save(ckpt, os.path.join(checkpoint_out_dir, 'ckpt.pt'))
-            if (epoch + 1) % args.save_ckpt_freq == 0:
-                torch.save(ckpt, os.path.join(checkpoint_out_dir, f'ckpt-{epoch}.pt'))
-            print(f"Checkpoint saved (epoch {epoch})")
+            print(f"Checkpoint saved to {checkpoint_out_dir}/ckpt.pt")
 
         # Validation (master only — avoids DDP sync complexity)
         if master_process:
@@ -650,7 +648,8 @@ def get_args():
     p.add_argument('--epochs', default=10, type=int)
     p.add_argument('--warmup_epochs', default=1, type=int)
     p.add_argument('--warmup_ratio', default=0.1, type=float)
-    p.add_argument('--save_ckpt_freq', default=5, type=int)
+    p.add_argument('--save_checkpoint', default=False, action='store_true',
+                   help='Save a checkpoint after the final epoch')
     p.add_argument('--block_size', default=1024, type=int)
     # Optimiser
     p.add_argument('--learning_rate', default=5e-4, type=float)
