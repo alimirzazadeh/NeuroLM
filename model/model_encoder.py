@@ -82,7 +82,7 @@ class NeuroLMEncoder(nn.Module):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--ckpt', required=True, help='Path to NeuroLM-B.pt checkpoint')
+    parser.add_argument('--ckpt', default='/home/alimirz/2026/neurolm/NeuroLM-B.pt', help='Path to NeuroLM-B.pt checkpoint')
     parser.add_argument('--pool_layer', type=int, default=-1)
     parser.add_argument('--batch_size', type=int, default=2)
     args = parser.parse_args()
