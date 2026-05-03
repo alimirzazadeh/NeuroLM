@@ -4,6 +4,7 @@ import time
 import argparse
 from contextlib import nullcontext
 from collections import defaultdict
+from datetime import datetime
 
 import h5py
 import numpy as np
@@ -442,13 +443,23 @@ def main(args):
 
     init(args)
 
-    checkpoint_out_dir = os.path.join(args.out_dir, 'checkpoints/instruction-internal')
+    # Timestamped experiment directory — unique per run, never overwritten
+    if ddp:
+        ts_list = [datetime.now().strftime('%Y%m%d_%H%M%S') if master_process else None]
+        torch.distributed.broadcast_object_list(ts_list, src=0)
+        timestamp = ts_list[0]
+    else:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    exp_dir = os.path.join(args.out_dir, f'exp_{timestamp}')
+    checkpoint_out_dir = os.path.join(exp_dir, 'checkpoints')
     if master_process:
         os.makedirs(checkpoint_out_dir, exist_ok=True)
+        print(f"Experiment dir: {exp_dir}")
 
     writer = None
     if master_process:
-        writer = SummaryWriter(os.path.join(args.out_dir, 'runs/instruction-internal'))
+        writer = SummaryWriter(os.path.join(exp_dir, 'runs'))
 
     # OpenWebText text-LM batches
     text_dir = os.path.join(args.out_dir, 'text')
@@ -632,8 +643,10 @@ def main(args):
 
             iter_num += 1
 
-        # Checkpoint (only on final epoch if --save_checkpoint is set)
-        if master_process and args.save_checkpoint and epoch == args.epochs - 1:
+        # Checkpointing: every other epoch, alternating between two slots to
+        # avoid accumulation; always save a final checkpoint at the last epoch.
+        is_final = (epoch == args.epochs - 1)
+        if master_process and (epoch % 2 == 0 or is_final):
             ckpt = {
                 'model': raw_model.state_dict(),
                 'optimizer': optimizer.state_dict(),
@@ -641,8 +654,13 @@ def main(args):
                 'iter_num': iter_num,
                 'epoch': epoch,
             }
-            torch.save(ckpt, os.path.join(checkpoint_out_dir, 'ckpt.pt'))
-            print(f"Checkpoint saved to {checkpoint_out_dir}/ckpt.pt")
+            if is_final:
+                path = os.path.join(checkpoint_out_dir, 'ckpt_final.pt')
+            else:
+                slot = 'ckpt_a.pt' if (epoch // 2) % 2 == 0 else 'ckpt_b.pt'
+                path = os.path.join(checkpoint_out_dir, slot)
+            torch.save(ckpt, path)
+            print(f"Checkpoint saved to {path}")
 
         # Validation (master only — avoids DDP sync complexity)
         if master_process:
@@ -702,8 +720,6 @@ def get_args():
     p.add_argument('--epochs', default=10, type=int)
     p.add_argument('--warmup_epochs', default=1, type=int)
     p.add_argument('--warmup_ratio', default=0.1, type=float)
-    p.add_argument('--save_checkpoint', default=False, action='store_true',
-                   help='Save a checkpoint after the final epoch')
     p.add_argument('--block_size', default=1024, type=int)
     # Optimiser
     p.add_argument('--learning_rate', default=5e-4, type=float)
