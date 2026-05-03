@@ -29,7 +29,23 @@ class NeuroLMEncoder(nn.Module):
             p.requires_grad_(False)
     """
 
-    def __init__(self, neurolm: NeuroLM, pool_layer: int = -1):
+    def __init__(self, neurolm: NeuroLM, pool_layer: int = -1,
+                 num_chans: int = 19, pool_time: bool = True,
+                 pool_chans: bool = True):
+        """
+        Args:
+            pool_time:  Pool over the time dimension.
+            pool_chans: Pool over the channel dimension.
+            num_chans:  Channels per time step (default 19).
+
+        Output shape by combination:
+            pool_time=True,  pool_chans=True  → (B, D)
+            pool_time=False, pool_chans=True  → (B, num_time, D)
+            pool_time=True,  pool_chans=False → (B, num_chans, D)
+            pool_time=False, pool_chans=False → (B, num_time, num_chans, D)
+
+        Invalid positions (eeg_mask=False) are zeroed out in all cases.
+        """
         super().__init__()
         n_layers = neurolm.GPT2.config.n_layer
         if pool_layer < 0:
@@ -41,6 +57,9 @@ class NeuroLMEncoder(nn.Module):
         self.pool_layer = pool_layer
         self.apply_ln_f = (pool_layer == n_layers - 1)
         self.hidden_size = neurolm.GPT2.config.n_embd
+        self.pool_time = pool_time
+        self.pool_chans = pool_chans
+        self.num_chans = num_chans
 
     def forward(
         self,
@@ -48,12 +67,8 @@ class NeuroLMEncoder(nn.Module):
         input_chans,  # (B, N_eeg)               int   — standard_1020 indices
         input_time,   # (B, N_eeg)               int   — time-step indices
         input_mask,   # (B, N_eeg)               bool  — valid patch mask for tokenizer
-        eeg_mask,     # (B, N_eeg)               bool  — True = valid token; used for attention and pooling
+        eeg_mask,     # (B, N_eeg)               bool  — True = valid token
     ):
-        """
-        Returns:
-            pooled: (B, hidden_size) mean-pooled EEG representation.
-        """
         gpt = self.neurolm.GPT2
 
         # EEG tokenization: raw patches → VQ indices → projected embeddings
@@ -63,15 +78,9 @@ class NeuroLMEncoder(nn.Module):
         )
         x = self.neurolm.encode_transform_layer(x)
         x = x + self.neurolm.pos_embed(input_chans)
-
-        # Add GPT2 positional embeddings (time-step positions)
         x = x + gpt.transformer.wpe(input_time)
 
-        # Run transformer blocks up to pool_layer.
-        # sdpa expects attn_mask broadcastable to (B, n_head, T, T).
-        # Reshape eeg_mask (B, T) → (B, 1, 1, T) so it acts as a key mask:
-        # all queries attend only to valid key positions.
-        attn_mask = eeg_mask[:, None, None, :]   # (B, 1, 1, N_eeg)
+        attn_mask = eeg_mask[:, None, None, :]       # (B, 1, 1, N_eeg) key mask
         x = gpt.transformer.drop(x)
         for block in gpt.transformer.h[:self.pool_layer + 1]:
             x = block(x, attn_mask)
@@ -79,10 +88,28 @@ class NeuroLMEncoder(nn.Module):
         if self.apply_ln_f:
             x = gpt.transformer.ln_f(x)
 
-        # Masked mean pool over valid positions only
-        w = eeg_mask.float().unsqueeze(-1)          # (B, N_eeg, 1)
-        pooled = (x * w).sum(dim=1) / w.sum(dim=1).clamp(min=1.0)
-        return pooled                               # (B, hidden_size)
+        # Reshape flat sequence → (B, num_time, num_chans, D)
+        # Tokens are time-major: [t0_c0..t0_c18, t1_c0..t1_c18, ...]
+        B, N, D = x.shape
+        num_time = N // self.num_chans
+        x = x.view(B, num_time, self.num_chans, D)
+        w = eeg_mask.float().view(B, num_time, self.num_chans, 1)
+
+        # Zero out invalid positions before any reduction
+        x = x * w
+
+        if self.pool_time and self.pool_chans:
+            # (B, D)
+            return x.sum(dim=(1, 2)) / w.sum(dim=(1, 2)).clamp(min=1.0)
+        elif not self.pool_time and self.pool_chans:
+            # (B, num_time, D)
+            return x.sum(dim=2) / w.sum(dim=2).clamp(min=1.0)
+        elif self.pool_time and not self.pool_chans:
+            # (B, num_chans, D)
+            return x.sum(dim=1) / w.sum(dim=1).clamp(min=1.0)
+        else:
+            # (B, num_time, num_chans, D) — already zeroed at invalid positions
+            return x
 
 
 if __name__ == '__main__':
@@ -134,11 +161,16 @@ if __name__ == '__main__':
     input_mask  = torch.ones(B, N_EEG, dtype=torch.bool, device=device)
     eeg_mask    = torch.ones(B, N_EEG, dtype=torch.bool, device=device)
 
-    # Run encoder
-    with torch.no_grad():
-        pooled = encoder(x_eeg, input_chans, input_time, input_mask, eeg_mask)
-
-    print(f"Output shape: {pooled.shape}")          # expect (B, 768)
-    print(f"Output mean:  {pooled.mean().item():.4f}")
-    print(f"Output std:   {pooled.std().item():.4f}")
+    cases = [
+        dict(pool_time=True,  pool_chans=True),   # (B, D)
+        dict(pool_time=False, pool_chans=True),   # (B, T, D)
+        dict(pool_time=True,  pool_chans=False),  # (B, C, D)
+        dict(pool_time=False, pool_chans=False),  # (B, T, C, D)
+    ]
+    for kw in cases:
+        enc = NeuroLMEncoder(neurolm, pool_layer=args.pool_layer,
+                             num_chans=NUM_CHANS, **kw).to(device)
+        with torch.no_grad():
+            out = enc(x_eeg, input_chans, input_time, input_mask, eeg_mask)
+        print(f"pool_time={str(kw['pool_time']):5s}  pool_chans={str(kw['pool_chans']):5s}  → {tuple(out.shape)}")
     print("OK")
