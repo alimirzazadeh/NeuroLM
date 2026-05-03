@@ -2,6 +2,9 @@ import argparse
 import sys
 import os
 
+# Ensure repo root is on sys.path whether this file is imported or run directly
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import torch.nn as nn
 
@@ -87,8 +90,6 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=2)
     args = parser.parse_args()
 
-    # Must run from repo root so model.* imports resolve
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from model.model import GPTConfig
     from dataset import standard_1020
 
