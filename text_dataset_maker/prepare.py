@@ -2,23 +2,23 @@
 # https://github.com/HazyResearch/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
 
 import os
+import argparse
 from tqdm import tqdm
 import numpy as np
 import tiktoken
 from datasets import load_dataset # huggingface datasets
 
-# number of workers in .map() call
-# good number to use is ~order number of cpu cores // 2
 num_proc = 8
-
-# number of workers in load_dataset() call
-# best number might be different from num_proc above as it also depends on NW speed.
-# it is better than 1 usually though
 num_proc_load_dataset = num_proc
 
 enc = tiktoken.get_encoding("gpt2")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--out_dir', type=str, default=os.path.dirname(__file__),
+                        help='Directory to write train.bin and val.bin')
+    args = parser.parse_args()
+    os.makedirs(args.out_dir, exist_ok=True)
     # takes 54GB in huggingface .cache dir, about 8M documents (8,013,769)
     dataset = load_dataset("openwebtext", num_proc=num_proc_load_dataset)
 
@@ -58,7 +58,7 @@ if __name__ == '__main__':
     # concatenate all the ids in each dataset into one large file we can use for training
     for split, dset in tokenized.items():
         arr_len = np.sum(dset['len'], dtype=np.uint64)
-        filename = os.path.join(os.path.dirname(__file__), f'{split}.bin')
+        filename = os.path.join(args.out_dir, f'{split}.bin')
         dtype = np.uint16 # (can do since enc.max_token_value == 50256 is < 2**16)
         arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,))
         total_batches = 1024
