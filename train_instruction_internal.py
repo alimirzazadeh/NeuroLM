@@ -401,7 +401,7 @@ def evaluate(model, val_dataset, writer, global_step: int) -> dict:
             task_labels_map[task_name].extend(labels_batch)
 
     results = {}
-    for task_name in val_dataset.tasks:
+    for task_name in inner.tasks:
         scores = np.array(task_scores.get(task_name, []))
         labels = np.array(task_labels_map.get(task_name, []))
         if len(scores) == 0 or len(np.unique(labels)) < 2:
