@@ -68,11 +68,13 @@ class NeuroLMEncoder(nn.Module):
         x = x + gpt.transformer.wpe(input_time)
 
         # Run transformer blocks up to pool_layer.
-        # eeg_mask (B, N_eeg) bool acts as a key mask: invalid positions are
-        # excluded from attention across all queries.
+        # sdpa expects attn_mask broadcastable to (B, n_head, T, T).
+        # Reshape eeg_mask (B, T) → (B, 1, 1, T) so it acts as a key mask:
+        # all queries attend only to valid key positions.
+        attn_mask = eeg_mask[:, None, None, :]   # (B, 1, 1, N_eeg)
         x = gpt.transformer.drop(x)
         for block in gpt.transformer.h[:self.pool_layer + 1]:
-            x = block(x, eeg_mask)
+            x = block(x, attn_mask)
 
         if self.apply_ln_f:
             x = gpt.transformer.ln_f(x)
