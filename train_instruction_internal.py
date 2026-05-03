@@ -296,11 +296,41 @@ class InternalInstructDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# Safe loading wrappers
+# ---------------------------------------------------------------------------
+
+class SafeDataset(Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        try:
+            return self.dataset[idx]
+        except Exception as e:
+            print(f"[SafeDataset] skipping idx {idx}: {e}")
+            return None
+
+
+def safe_collate_fn(batch):
+    batch = [x for x in batch if x is not None]
+    if not batch:
+        return None
+    try:
+        return torch.utils.data.dataloader.default_collate(batch)
+    except Exception as e:
+        print(f"[safe_collate_fn] collate error: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def evaluate(model, val_dataset: InternalInstructDataset, writer, global_step: int) -> dict:
+def evaluate(model, val_dataset, writer, global_step: int) -> dict:
     """
     For each binary task: collects (yes_logit - no_logit) scores and ground-truth
     labels, then computes balanced_accuracy, ROC-AUC, and PR-AUC.
@@ -310,21 +340,26 @@ def evaluate(model, val_dataset: InternalInstructDataset, writer, global_step: i
     """
     model.eval()
 
-    yes_id = val_dataset.yes_id
-    no_id = val_dataset.no_id
+    # Unwrap SafeDataset if present
+    inner: InternalInstructDataset = (
+        val_dataset.dataset if isinstance(val_dataset, SafeDataset) else val_dataset
+    )
+
+    yes_id = inner.yes_id
+    no_id = inner.no_id
 
     # Group val files by their assigned task index for efficient batched inference
     task_groups: dict[int, list[int]] = defaultdict(list)
-    for fi, (task_idx, _) in enumerate(val_dataset.val_task_assignments):
+    for fi, (task_idx, _) in enumerate(inner.val_task_assignments):
         task_groups[task_idx].append(fi)
 
     task_scores: dict[str, list[float]] = defaultdict(list)
     task_labels_map: dict[str, list[int]] = defaultdict(list)
 
     for task_idx, file_indices in task_groups.items():
-        task_name = val_dataset.tasks[task_idx]
+        task_name = inner.tasks[task_idx]
         # All files in this group share the same X_text (fixed prompt per task)
-        prompt_tokens = val_dataset.prompt_tokens[task_name]
+        prompt_tokens = inner.prompt_tokens[task_name]
         n_text = prompt_tokens.size(0)
         gpt_mask = InternalInstructDataset._build_gpt_mask(n_text).to(device)
 
@@ -333,10 +368,15 @@ def evaluate(model, val_dataset: InternalInstructDataset, writer, global_step: i
             batch_fis = file_indices[batch_start:batch_start + 32]
             eegs, labels_batch = [], []
             for fi in batch_fis:
-                _, gt_label = val_dataset.val_task_assignments[fi]
-                offset = val_dataset.val_offsets[fi]
-                eegs.append(val_dataset._load_eeg_window(fi, offset))
-                labels_batch.append(gt_label)
+                _, gt_label = inner.val_task_assignments[fi]
+                offset = inner.val_offsets[fi]
+                try:
+                    eegs.append(inner._load_eeg_window(fi, offset))
+                    labels_batch.append(gt_label)
+                except Exception as e:
+                    print(f"[evaluate] skipping val file {fi}: {e}")
+            if not eegs:
+                continue
 
             B = len(eegs)
             X_eeg = torch.stack(eegs).float().to(device)                          # (B, 570, 200)
@@ -440,14 +480,14 @@ def main(args):
     train_labels = labels.get_labels(labels.train_filenames)
     val_labels = labels.get_labels(labels.val_filenames)
 
-    train_dataset = InternalInstructDataset(
+    train_dataset = SafeDataset(InternalInstructDataset(
         labels.train_filenames, train_labels, downstream_tasks,
         eeg_data_dir=EEG_DATA_DIR, mode='train', seed=args.seed,
-    )
-    val_dataset = InternalInstructDataset(
+    ))
+    val_dataset = SafeDataset(InternalInstructDataset(
         labels.val_filenames, val_labels, downstream_tasks,
         eeg_data_dir=EEG_DATA_DIR, mode='val', seed=args.seed,
-    )
+    ))
     if master_process:
         print(f"Train files: {len(train_dataset)}  |  Val items: {len(val_dataset)}")
 
@@ -457,11 +497,13 @@ def main(args):
         )
         train_loader = DataLoader(train_dataset, sampler=sampler,
                                   batch_size=args.eeg_batch_size,
-                                  num_workers=8, pin_memory=True, drop_last=True)
+                                  num_workers=8, pin_memory=True, drop_last=True,
+                                  collate_fn=safe_collate_fn)
     else:
         train_loader = DataLoader(train_dataset, batch_size=args.eeg_batch_size,
                                   shuffle=True, num_workers=8,
-                                  pin_memory=True, drop_last=True)
+                                  pin_memory=True, drop_last=True,
+                                  collate_fn=safe_collate_fn)
 
     # Model init
     iter_num = 0
@@ -521,6 +563,9 @@ def main(args):
             train_loader.sampler.set_epoch(epoch)
 
         for step, batch in enumerate(train_loader):
+            if batch is None:
+                continue
+
             lr = lr_schedule[iter_num] if args.decay_lr else args.learning_rate
             for pg in optimizer.param_groups:
                 pg['lr'] = lr
