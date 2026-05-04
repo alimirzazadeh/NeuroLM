@@ -233,8 +233,8 @@ def main(args):
     iter_num = 0
 
     tokenizer_ckpt_path = os.path.join(args.out_dir, args.tokenizer_path)
-
-    if os.path.exists(os.path.join(checkpoint_out_dir, 'ckpt.pt')):
+    
+    if os.path.exists(os.path.join(checkpoint_out_dir, 'ckpt_a.pt')):
         init_from = 'resume'
     else:
         init_from = 'pretrained'
@@ -249,7 +249,7 @@ def main(args):
     if init_from == 'resume':
         print(f"Resuming training from {args.out_dir}")
         # resume training from a checkpoint.
-        ckpt_path = os.path.join(checkpoint_out_dir, 'ckpt.pt')
+        ckpt_path = os.path.join(checkpoint_out_dir, 'ckpt_a.pt')
         checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
