@@ -559,6 +559,7 @@ class HMCLoader(Dataset):
     def __getitem__(self, index):
         sample = pickle.load(open(os.path.join(self.root, self.files[index]), "rb"))
         X = sample["X"]
+        print(sample['y'])
         Y = int(sample["y"])
 
         data = torch.FloatTensor(X / 100)

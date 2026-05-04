@@ -25,7 +25,7 @@ from torch.utils.data.dataset import ConcatDataset
 
 
 EXT_DATA  = '/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS'
-TEXT_DATA = '/orcd/compute/dinaktbi/001/2026/EEG_FM/text'
+TEXT_DATA = '/orcd/compute/dinaktbi/001/2026/EEG_FM/NeuroLM/text' #'/orcd/compute/dinaktbi/001/2026/EEG_FM/text'
 
 master_process = None; device = None; dtype = None
 ctx = None; ddp_rank = None; device_type = None
@@ -258,7 +258,7 @@ def main(args):
         print(f"Resuming training from {args.out_dir}")
         # resume training from a checkpoint.
         ckpt_path = os.path.join(checkpoint_out_dir, 'ckpt.pt')
-        checkpoint = torch.load(ckpt_path, map_location=device)
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
@@ -290,7 +290,7 @@ def main(args):
         print(f"Initializing training from {args.NeuroLM_path}")
         # resume training from a checkpoint.
         ckpt_path = args.NeuroLM_path
-        checkpoint = torch.load(ckpt_path, map_location=device)
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line

@@ -186,9 +186,13 @@ def save_pickle(object, filename):
 TUEV dataset is downloaded from https://isip.piconepress.com/projects/tuh_eeg/html/downloads.shtml
 """
 
-root = "/userhome1/jiangweibang/Datasets/TUH_Event/v2.0.0/edf"
-train_out_dir = os.path.join(root, "processed_train")
-eval_out_dir = os.path.join(root, "processed_eval")
+#root = "/userhome1/jiangweibang/Datasets/TUH_Event/v2.0.0/edf
+root = "/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS/TUEV/data/v2.0.1/edf"
+out_dir = "/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS/TUEV/neurolm"
+
+#os.makedirs(out_dir)
+train_out_dir = os.path.join(out_dir, "processed_train")
+eval_out_dir = os.path.join(out_dir, "processed_eval")
 if not os.path.exists(train_out_dir):
     os.makedirs(train_out_dir)
 if not os.path.exists(eval_out_dir):

@@ -97,8 +97,11 @@ def save_pickle(object, filename):
         pickle.dump(object, f)
 
 
-root = "/D_data/yansen/tuh_data/tuh_eeg_slowing/edf"
-out_dir = '../teamdrive/TUSL'
+#root = "/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS/TUEV/data/v2.0.1/edf"
+root = "/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS/TUSL/data/v2.0.1/edf"
+out_dir = "/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS/TUSL/neurolm"
+#root = "/D_data/yansen/tuh_data/tuh_eeg_slowing/edf"
+#out_dir = '../teamdrive/TUSL'
 train_out_dir = os.path.join(out_dir, "train")
 eval_out_dir = os.path.join(out_dir, "eval")
 test_out_dir = os.path.join(out_dir, "test")
