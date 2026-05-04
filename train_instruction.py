@@ -545,7 +545,7 @@ def evaluate(model, dataset_info, dataloader, decode):
 
 def get_args():
     parser = argparse.ArgumentParser('VQ training script', add_help=False)
-    parser.add_argument('--out_dir', default='./')
+    parser.add_argument('--out_dir', default='/orcd/compute/dinaktbi/001/2026/EEG_FM/NeuroLM/')
     parser.add_argument('--name', default='', type=str, help='Optional prefix for experiment folder name')
     parser.add_argument('--tokenizer_path', default='checkpoints/VQ.py')
     parser.add_argument('--NeuroLM_path', default='/home/alimirz/2026/neurolm/NeuroLM-B.pt')
