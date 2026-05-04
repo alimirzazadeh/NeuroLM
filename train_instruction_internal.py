@@ -208,10 +208,10 @@ class InternalInstructDataset(Dataset):
             if ch in ch_map:
                 ordered[:, c_out] = raw[:, ch_map[ch]]
 
-        # Per-channel z-score + clip (consistent with downstream pipeline)
-        mean = ordered.mean(axis=0, keepdims=True)
-        std = ordered.std(axis=0, keepdims=True) + 1e-8
-        ordered = np.clip((ordered - mean) / std, -15.0, 15.0)
+        # Global z-score over all samples and channels — matches pretraining std_norm
+        mean = ordered.mean()
+        std = ordered.std() + 1e-8
+        ordered = (ordered - mean) / std
 
         # (WINDOW_SAMPLES, 19) → (NUM_TIME, PATCH_SIZE, 19) → (NUM_TIME, 19, PATCH_SIZE)
         # → (EEG_MAX_LEN, PATCH_SIZE)
