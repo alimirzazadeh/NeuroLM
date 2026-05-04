@@ -3,7 +3,6 @@ import sys
 import time
 import argparse
 from contextlib import nullcontext
-from collections import defaultdict
 from datetime import datetime
 
 import h5py
@@ -13,7 +12,6 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.tensorboard import SummaryWriter
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score, average_precision_score
 import tiktoken
 
 # sys.path.insert(0, '/Users/alimirz/Research/EEG_FM/EEG_FM')
@@ -145,16 +143,8 @@ class InternalInstructDataset(Dataset):
         self.seed = seed
 
         enc = tiktoken.get_encoding("gpt2")
-        self.yes_id = enc.encode(" Yes")[0]
-        self.no_id = enc.encode(" No")[0]
 
-        # Precompute prompt token tensors (fixed per task)
-        self.prompt_tokens: dict[str, torch.Tensor] = {}
-        for task in self.tasks:
-            ids = enc.encode(build_prompt(task))
-            self.prompt_tokens[task] = torch.tensor(ids, dtype=torch.long)
-
-        # Precompute full-text token tensors for both labels (train only)
+        # Precompute full-text token tensors for both labels
         self._full_text_tokens: dict[tuple, torch.Tensor] = {}
         for task in self.tasks:
             for lbl in (0, 1):
@@ -263,10 +253,9 @@ class InternalInstructDataset(Dataset):
             task_name = self.tasks[task_idx]
 
             X_eeg = self._load_eeg_window(file_idx, offset)
-            X_text = self.prompt_tokens[task_name].clone()    # exact prompt, no padding
-            gpt_mask = self._build_gpt_mask(X_text.size(0))
-            return (X_eeg, X_text, torch.tensor(label, dtype=torch.long),
-                    input_chans, input_time, eeg_mask, gpt_mask)
+            X_text, Y_text = self._build_train_text(task_name, label)
+            gpt_mask = self._build_gpt_mask(TEXT_MAX_LEN)
+            return X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask
 
         else:
             file_idx = idx
@@ -331,107 +320,55 @@ def safe_collate_fn(batch):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def evaluate(model, val_dataset, writer, global_step: int) -> dict:
-    """
-    For each binary task: collects (yes_logit - no_logit) scores and ground-truth
-    labels, then computes balanced_accuracy, ROC-AUC, and PR-AUC.
-
-    Items within the same task always share an identical prompt → same X_text
-    length, so we batch them together for efficiency.
-    """
+def evaluate(model, val_loader, get_batch, writer, global_step: int, vocab_size: int):
     model.eval()
 
-    # Unwrap SafeDataset if present
-    inner: InternalInstructDataset = (
-        val_dataset.dataset if isinstance(val_dataset, SafeDataset) else val_dataset
-    )
+    total_instr_loss = 0.0
+    total_text_loss = 0.0
+    n_batches = 0
 
-    yes_id = inner.yes_id
-    no_id = inner.no_id
-
-    # Group val files by their assigned task index for efficient batched inference
-    task_groups: dict[int, list[int]] = defaultdict(list)
-    for fi, (task_idx, _) in enumerate(inner.val_task_assignments):
-        task_groups[task_idx].append(fi)
-
-    task_scores: dict[str, list[float]] = defaultdict(list)
-    task_labels_map: dict[str, list[int]] = defaultdict(list)
-
-    for task_idx, file_indices in task_groups.items():
-        task_name = inner.tasks[task_idx]
-        # All files in this group share the same X_text (fixed prompt per task)
-        prompt_tokens = inner.prompt_tokens[task_name]
-        n_text = prompt_tokens.size(0)
-        gpt_mask = InternalInstructDataset._build_gpt_mask(n_text).to(device)
-
-        # Process in mini-batches
-        for batch_start in range(0, len(file_indices), 32):
-            batch_fis = file_indices[batch_start:batch_start + 32]
-            eegs, labels_batch = [], []
-            for fi in batch_fis:
-                _, gt_label = inner.val_task_assignments[fi]
-                offset = inner.val_offsets[fi]
-                try:
-                    eegs.append(inner._load_eeg_window(fi, offset))
-                    labels_batch.append(gt_label)
-                except Exception as e:
-                    print(f"[evaluate] skipping val file {fi}: {e}")
-            if not eegs:
-                continue
-
-            B = len(eegs)
-            X_eeg = torch.stack(eegs).float().to(device)                          # (B, 570, 200)
-            X_text = prompt_tokens.unsqueeze(0).expand(B, -1).to(device)          # (B, prompt_len)
-            input_chans = torch.IntTensor(_CHAN_INDICES).unsqueeze(0).expand(B, -1).to(device)
-            input_time = torch.IntTensor(_TIME_INDICES).unsqueeze(0).expand(B, -1).to(device)
-            eeg_mask = torch.ones(B, EEG_MAX_LEN, dtype=torch.bool, device=device)
-            batch_gpt_mask = gpt_mask.expand(B, -1, -1, -1)                       # (B, 1, N, N)
-
-            Y_eeg = torch.full((B, EEG_MAX_LEN),
-                               fill_value=-1 - model.GPT2.config.vocab_size,
-                               device=device)
-
-            with ctx:
-                _, _, logits = model(X_eeg, Y_eeg, X_text, None,
-                                     input_chans, input_time, eeg_mask,
-                                     eeg_text_mask=batch_gpt_mask)
-            # logits: (B, 1, vocab_size)  — last-position only
-            last = logits[:, 0, :]                                # (B, vocab_size)
-            scores = (last[:, yes_id] - last[:, no_id]).cpu().tolist()
-            task_scores[task_name].extend(scores)
-            task_labels_map[task_name].extend(labels_batch)
-
-    results = {}
-    for task_name in inner.tasks:
-        scores = np.array(task_scores.get(task_name, []))
-        labels = np.array(task_labels_map.get(task_name, []))
-        if len(scores) == 0 or len(np.unique(labels)) < 2:
+    for batch in val_loader:
+        if batch is None:
             continue
-        binary_preds = (scores > 0).astype(int)
-        try:
-            bal_acc = balanced_accuracy_score(labels, binary_preds)
-            roc = roc_auc_score(labels, scores)
-            pr = average_precision_score(labels, scores)
-        except Exception:
-            bal_acc, roc, pr = 0.0, 0.5, 0.5
-        results[task_name] = {'balanced_acc': bal_acc, 'roc_auc': roc, 'pr_auc': pr}
-        if writer is not None:
-            writer.add_scalar(f'val/{task_name}/balanced_acc', bal_acc, global_step)
-            writer.add_scalar(f'val/{task_name}/roc_auc', roc, global_step)
-            writer.add_scalar(f'val/{task_name}/pr_auc', pr, global_step)
+        X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask = batch
+        X_eeg = X_eeg.float().to(device, non_blocking=True)
+        X_text = X_text.to(device, non_blocking=True)
+        Y_text = Y_text.to(device, non_blocking=True)
+        input_chans = input_chans.to(device, non_blocking=True)
+        input_time = input_time.to(device, non_blocking=True)
+        eeg_mask = eeg_mask.to(device, non_blocking=True)
+        gpt_mask = gpt_mask.to(device, non_blocking=True)
 
-    if results:
-        mean_bal = np.mean([v['balanced_acc'] for v in results.values()])
-        mean_roc = np.mean([v['roc_auc'] for v in results.values()])
-        mean_pr = np.mean([v['pr_auc'] for v in results.values()])
-        results['__mean__'] = {'balanced_acc': mean_bal, 'roc_auc': mean_roc, 'pr_auc': mean_pr}
-        if writer is not None:
-            writer.add_scalar('val/mean_balanced_acc', mean_bal, global_step)
-            writer.add_scalar('val/mean_roc_auc', mean_roc, global_step)
-            writer.add_scalar('val/mean_pr_auc', mean_pr, global_step)
+        Y_eeg = torch.full((X_eeg.size(0), X_eeg.size(1)),
+                           fill_value=-1 - vocab_size, device=device)
+
+        X_text2, Y_text2 = get_batch('val')
+
+        with ctx:
+            _, log1, _ = model(X_eeg, Y_eeg, X_text, Y_text,
+                               input_chans, input_time, eeg_mask,
+                               eeg_text_mask=gpt_mask)
+            _, log2, _ = model(None, None, X_text2, Y_text2)
+
+        total_instr_loss += log1['val/loss']
+        total_text_loss += log2['val/loss']
+        n_batches += 1
+
+    if n_batches == 0:
+        model.train()
+        return {}
+
+    instr_loss = total_instr_loss / n_batches
+    text_loss = total_text_loss / n_batches
+    print(f"  [val]  instr={instr_loss:.4f}  text={text_loss:.4f}")
+
+    if writer is not None:
+        writer.add_scalar('val/instruction_loss', instr_loss, global_step)
+        writer.add_scalar('val/text_loss', text_loss, global_step)
+        writer.add_scalar('val/total_loss', instr_loss + text_loss, global_step)
 
     model.train()
-    return results
+    return {'instr_loss': instr_loss, 'text_loss': text_loss}
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +438,7 @@ def main(args):
         eeg_data_dir=EEG_DATA_DIR, mode='val', seed=args.seed,
     ))
     if master_process:
-        print(f"Train files: {len(train_dataset)}  |  Val items: {len(val_dataset)}")
+        print(f"Train files: {len(train_dataset)}  |  Val files: {len(val_dataset)}")
 
     if ddp:
         sampler = torch.utils.data.DistributedSampler(
@@ -516,6 +453,11 @@ def main(args):
                                   shuffle=True, num_workers=8,
                                   pin_memory=True, drop_last=True,
                                   collate_fn=safe_collate_fn)
+
+    val_loader = DataLoader(val_dataset, batch_size=args.eeg_batch_size,
+                            shuffle=False, num_workers=4,
+                            pin_memory=True, drop_last=False,
+                            collate_fn=safe_collate_fn)
 
     # Model init
     iter_num = 0
@@ -665,8 +607,8 @@ def main(args):
 
         # Validation (master only — avoids DDP sync complexity)
         if master_process:
-            results = evaluate(raw_model, val_dataset, writer, global_step=iter_num)
-            _print_val_results(epoch, results)
+            evaluate(raw_model, val_loader, get_batch, writer,
+                     global_step=iter_num, vocab_size=raw_model.GPT2.config.vocab_size)
 
     if writer is not None:
         writer.close()
@@ -684,19 +626,6 @@ def _load_state_dict(model, state_dict):
                for k, v in state_dict.items()}
     model.load_state_dict(cleaned)
 
-
-def _print_val_results(epoch: int, results: dict):
-    print(f"\n=== Val results (epoch {epoch}) ===")
-    if '__mean__' in results:
-        m = results['__mean__']
-        print(f"  [mean]  bal_acc={m['balanced_acc']:.4f}  "
-              f"roc={m['roc_auc']:.4f}  pr={m['pr_auc']:.4f}")
-    for name, m in results.items():
-        if name == '__mean__':
-            continue
-        print(f"  {name}: bal_acc={m['balanced_acc']:.4f}  "
-              f"roc={m['roc_auc']:.4f}  pr={m['pr_auc']:.4f}")
-    print()
 
 
 # ---------------------------------------------------------------------------
