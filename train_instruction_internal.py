@@ -144,9 +144,12 @@ class InternalInstructDataset(Dataset):
 
         enc = tiktoken.get_encoding("gpt2")
 
-        # Precompute full-text token tensors for both labels
+        # Precompute full-text token tensors for both labels, and prompt-only lengths
         self._full_text_tokens: dict[tuple, torch.Tensor] = {}
+        self.prompt_tokens: dict[str, torch.Tensor] = {}
         for task in self.tasks:
+            prompt_ids = enc.encode(build_prompt(task))
+            self.prompt_tokens[task] = torch.tensor(prompt_ids[:TEXT_MAX_LEN], dtype=torch.long)
             for lbl in (0, 1):
                 ids = enc.encode(build_full_text(task, lbl), allowed_special={'<|endoftext|>'})
                 ids_t = torch.tensor(ids[:TEXT_MAX_LEN], dtype=torch.long)
