@@ -89,12 +89,13 @@ if __name__ == "__main__":
     Subject ID = filename.split('_')[0].
     All four source folders are searched for each subject.
     """
+    out_dir = "/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS/TUAB/neurolm"
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root', default="/userhome1/jiangweibang/Datasets/TUH_Abnormal/v3.0.0/edf/")
-    parser.add_argument('--train_split', required=True, help='Path to tuab_train.txt')
-    parser.add_argument('--test_split', required=True, help='Path to tuab_test.txt')
-    parser.add_argument('--num_workers', type=int, default=24)
+    parser.add_argument('--root', default="/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS/TUAB/data/v3.0.1/edf/")
+    parser.add_argument('--train_split', default="/home/alimirz/2026/EEG_FM/EEG_FM/taming-transformers/data/tuab_train.txt", help='Path to tuab_train.txt')
+    parser.add_argument('--test_split', default="/home/alimirz/2026/EEG_FM/EEG_FM/taming-transformers/data/tuab_test.txt", help='Path to tuab_test.txt')
+    parser.add_argument('--num_workers', type=int, default=12)
     args = parser.parse_args()
 
     root = args.root
@@ -120,9 +121,9 @@ if __name__ == "__main__":
 
     # Create output folders
     for split in ("train", "test"):
-        os.makedirs(os.path.join(root, "processed", split), exist_ok=True)
-    train_dump_folder = os.path.join(root, "processed", "train")
-    test_dump_folder  = os.path.join(root, "processed", "test")
+        os.makedirs(os.path.join(out_dir, "processed", split), exist_ok=True)
+    train_dump_folder = os.path.join(out_dir, "processed", "train")
+    test_dump_folder  = os.path.join(out_dir, "processed", "test")
 
     # Build parameter list
     parameters = []
