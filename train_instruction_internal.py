@@ -650,9 +650,9 @@ def get_args():
                    help='Print a decoded sample question at each log interval')
     # Training
     p.add_argument('--gradient_accumulation_steps', default=1, type=int)
-    p.add_argument('--eeg_batch_size', default=32, type=int)
+    p.add_argument('--eeg_batch_size', default=64, type=int)
     p.add_argument('--text_batch_size', default=16, type=int)
-    p.add_argument('--epochs', default=10, type=int)
+    p.add_argument('--epochs', default=100, type=int)
     p.add_argument('--warmup_epochs', default=1, type=int)
     p.add_argument('--warmup_ratio', default=0.1, type=float)
     p.add_argument('--block_size', default=1024, type=int)

@@ -458,29 +458,34 @@ def main(args):
                 torch.save(ckpt, path)
                 print(f"Checkpoint saved to {path}")
         
-        # validation and test
-        for dataset_info in all_datasets:
-            dname = dataset_info['name']
-            print(f'Dataset: {dname}')
-            results_val = evaluate(raw_model, dataset_info, dataset_info['data_loader_val'], decode)
-            print('Eval:')
-            for metric, val in results_val.items():
-                print(f'  {metric}: {val}')
-                if master_process and writer is not None:
-                    writer.add_scalar(f'val_{dname}/{metric}', val, iter_num)
-            results_test = evaluate(raw_model, dataset_info, dataset_info['data_loader_test'], decode)
-            print('Test:')
-            for metric, val in results_test.items():
-                print(f'  {metric}: {val}')
-                if master_process and writer is not None:
-                    writer.add_scalar(f'test_{dname}/{metric}', val, iter_num)
-            print('=' * 10)
-            if args.wandb_log and master_process:
-                log = {}
-                for metric in results_val.keys():
-                    log[f'val_{dname}/{metric}'] = results_val[metric]
-                    log[f'test_{dname}/{metric}'] = results_test[metric]
-                wandb.log(log)
+        # validation — loss-based, same as training forward pass
+        if master_process:
+            evaluate_loss(raw_model, all_datasets, get_batch, writer, iter_num)
+
+        # # Per-dataset accuracy/AUC evaluation (commented out)
+        # for dataset_info in all_datasets:
+        #     dname = dataset_info['name']
+        #     print(f'Dataset: {dname}')
+        #     results_val = evaluate(raw_model, dataset_info, dataset_info['data_loader_val'], decode)
+        #     print('Eval:')
+        #     for metric, val in results_val.items():
+        #         print(f'  {metric}: {val}')
+        #         if master_process and writer is not None:
+        #             writer.add_scalar(f'val_{dname}/{metric}', val, iter_num)
+        #     results_test = evaluate(raw_model, dataset_info, dataset_info['data_loader_test'], decode)
+        #     print('Test:')
+        #     for metric, val in results_test.items():
+        #         print(f'  {metric}: {val}')
+        #         if master_process and writer is not None:
+        #             writer.add_scalar(f'test_{dname}/{metric}', val, iter_num)
+        #     print('=' * 10)
+        #     if args.wandb_log and master_process:
+        #         log = {}
+        #         for metric in results_val.keys():
+        #             log[f'val_{dname}/{metric}'] = results_val[metric]
+        #             log[f'test_{dname}/{metric}'] = results_test[metric]
+        #         wandb.log(log)
+
         if args.eval_only:
             break
 
@@ -488,6 +493,53 @@ def main(args):
         writer.close()
     if ddp:
         destroy_process_group()
+
+
+@torch.no_grad()
+def evaluate_loss(model, all_datasets, get_batch, writer, global_step):
+    model.eval()
+    total_instr_loss = 0.0
+    total_text_loss = 0.0
+    n_batches = 0
+
+    for dataset_info in all_datasets:
+        for batch in dataset_info['data_loader_val']:
+            X_eeg, X_text, Y_text, input_chans, input_time, input_mask, gpt_mask = batch
+            X_eeg = X_eeg.float().to(device, non_blocking=True)
+            X_text = X_text.to(device, non_blocking=True)
+            Y_text = Y_text.to(device, non_blocking=True)
+            input_chans = input_chans.to(device, non_blocking=True)
+            input_time = input_time.to(device, non_blocking=True)
+            gpt_mask = gpt_mask.to(device, non_blocking=True)
+            if input_mask is not None:
+                input_mask = input_mask.to(device, non_blocking=True)
+
+            Y_eeg = torch.full((X_eeg.size(0), X_eeg.size(1)),
+                               fill_value=-1 - model.GPT2.config.vocab_size, device=device)
+            X_text2, Y_text2 = get_batch('val')
+
+            with ctx:
+                _, log1, _ = model(X_eeg, Y_eeg, X_text, Y_text,
+                                   input_chans, input_time, input_mask,
+                                   eeg_text_mask=gpt_mask)
+                _, log2, _ = model(None, None, X_text2, Y_text2)
+
+            total_instr_loss += log1['val/loss']
+            total_text_loss += log2['val/loss']
+            n_batches += 1
+
+    model.train()
+
+    if n_batches == 0:
+        return
+
+    instr_loss = total_instr_loss / n_batches
+    text_loss = total_text_loss / n_batches
+    print(f"  [val]  instr={instr_loss:.4f}  text={text_loss:.4f}  total={instr_loss + text_loss:.4f}")
+    if writer is not None:
+        writer.add_scalar('val/instruction_loss', instr_loss, global_step)
+        writer.add_scalar('val/text_loss', text_loss, global_step)
+        writer.add_scalar('val/total_loss', instr_loss + text_loss, global_step)
 
 
 def get_pred(pred_string, dataset_info):
