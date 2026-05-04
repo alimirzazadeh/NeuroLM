@@ -43,11 +43,11 @@ def prepare_TUEV_dataset(root, is_instruct=False, eeg_max_len=-1, text_max_len=-
     )
     test_dataset = TUEVLoader(
         os.path.join(
-            root, "processed_test"), test_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len
+            root, "processed_test"), test_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len
     )
     val_dataset = TUEVLoader(
         os.path.join(
-            root, "processed_eval"), val_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len
+            root, "processed_eval"), val_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len
     )
     print(len(train_files), len(val_files), len(test_files))
     return train_dataset, test_dataset, val_dataset
@@ -62,8 +62,8 @@ def prepare_TUAB_dataset(root, is_instruct=False, eeg_max_len=-1, text_max_len=-
 
     # prepare training and test data loader
     train_dataset = TUABLoader(os.path.join(root, "train"), train_files, is_instruct=is_instruct, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    test_dataset = TUABLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    val_dataset = TUABLoader(os.path.join(root, "val"), val_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    test_dataset = TUABLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    val_dataset = TUABLoader(os.path.join(root, "val"), val_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
     print(len(train_files), len(val_files), len(test_files))
     return train_dataset, test_dataset, val_dataset
 
@@ -77,8 +77,8 @@ def prepare_TUSL_dataset(root, is_instruct=False, eeg_max_len=-1, text_max_len=-
 
     # prepare training and test data loader
     train_dataset = TUSLLoader(os.path.join(root, "train"), train_files, is_instruct=is_instruct, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    test_dataset = TUSLLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    val_dataset = TUSLLoader(os.path.join(root, "eval"), val_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    test_dataset = TUSLLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    val_dataset = TUSLLoader(os.path.join(root, "eval"), val_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
     print(len(train_files), len(val_files), len(test_files))
     return train_dataset, test_dataset, val_dataset
 
@@ -92,8 +92,8 @@ def prepare_HMC_dataset(root, is_instruct=False, eeg_max_len=-1, text_max_len=-1
 
     # prepare training and test data loader
     train_dataset = HMCLoader(os.path.join(root, "train"), train_files, is_instruct=is_instruct, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    test_dataset = HMCLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    val_dataset = HMCLoader(os.path.join(root, "eval"), val_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    test_dataset = HMCLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    val_dataset = HMCLoader(os.path.join(root, "eval"), val_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
     print(len(train_files), len(val_files), len(test_files))
     return train_dataset, test_dataset, val_dataset
 
@@ -107,8 +107,8 @@ def prepare_Workload_dataset(root, is_instruct=False, eeg_max_len=-1, text_max_l
 
     # prepare training and test data loader
     train_dataset = WorkloadLoader(os.path.join(root, "train"), train_files, is_instruct=is_instruct, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    test_dataset = WorkloadLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-    val_dataset = WorkloadLoader(os.path.join(root, "eval"), val_files, is_instruct=is_instruct, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    test_dataset = WorkloadLoader(os.path.join(root, "test"), test_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
+    val_dataset = WorkloadLoader(os.path.join(root, "eval"), val_files, is_instruct=is_instruct, is_val=False, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
     print(len(train_files), len(val_files), len(test_files))
     return train_dataset, test_dataset, val_dataset
 

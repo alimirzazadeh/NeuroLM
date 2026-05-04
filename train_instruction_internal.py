@@ -13,9 +13,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.tensorboard import SummaryWriter
 import tiktoken
 
-# sys.path.insert(0, '/Users/alimirz/Research/EEG_FM/EEG_FM')
-sys.path.insert(0, '/home/alimirz/2026/EEG_FM/EEG_FM/')
-from data_split_scripts.probe_label_hunter import ProbeLabelHunterV3
+import pandas as pd
 
 from model.model_neurolm import NeuroLM
 from model.model import GPTConfig
@@ -27,7 +25,9 @@ from utils import cosine_scheduler
 # Constants
 # ---------------------------------------------------------------------------
 
-EEG_DATA_DIR = '/orcd/compute/dinaktbi/001/2026/EEG_FM/preprocessed_eeg_v2'
+EEG_DATA_DIR  = '/orcd/compute/dinaktbi/001/2026/EEG_FM/preprocessed_eeg_v2'
+_TAMING_DATA  = '/home/alimirz/2026/EEG_FM/EEG_FM/taming-transformers/data'
+_BAD_H5_FILES = '/home/alimirz/2026/EEG_FM/EEG_FM/data_split_scripts/bad_h5_files.txt'
 
 # 19-channel order used by preprocessed_eeg_v2 (lowercase, as stored in H5)
 CHANNEL_ORDER = ['o1', 'o2', 't6', 'p4', 'pz', 'p3', 't5', 't3',
@@ -50,6 +50,81 @@ _TIME_INDICES = [t for t in range(NUM_TIME) for _ in range(NUM_CHANS)]
 master_process = None; device = None; dtype = None
 ctx = None; ddp_rank = None; device_type = None
 ddp = None; ddp_world_size = None; ddp_local_rank = None
+
+
+# ---------------------------------------------------------------------------
+# Label loading (direct CSV, no propensity-score matching)
+# ---------------------------------------------------------------------------
+
+def load_label_data(eeg_data_dir=EEG_DATA_DIR, debug=False):
+    """
+    Merge reports + EHR CSVs, scan EEG dir, return:
+      train_filenames, val_filenames, downstream_tasks, get_labels(filenames)
+    Labels are 0/1 as-is — no matching step, so no -1 for unmatched controls.
+    """
+    reports = pd.read_csv(os.path.join(_TAMING_DATA, 'reports_benchmark_downstream.csv'))
+    ehr = pd.read_csv(os.path.join(_TAMING_DATA, 'patient_train_val_test_split.csv'))
+
+    # Keep only med_/dis_ label cols + join key + split/size flags from EHR
+    ehr_keep = [c for c in ehr.columns
+                if c.startswith('med_') or c.startswith('dis_')
+                or c in ('BDSPPatientID', 'split', 'in_large', 'in_medium', 'mit_gender')]
+    ehr = ehr[ehr_keep]
+
+    df = reports.merge(ehr, on='BDSPPatientID', how='left')
+    df.set_index('filename', inplace=True)
+    df = df[~df.index.duplicated(keep='first')]  # deduplicate session keys
+
+    # Filter to in_large sessions with valid gender
+    df = df[df['mit_gender'] != -1]
+    df = df[df['in_large'].astype(bool)]
+
+    # Task columns: everything that isn't metadata
+    _non_task = {'BDSPPatientID', 'split', 'fold', 'SiteID', 'SessionID',
+                 'report_filename', 'filename', 'in_large', 'in_medium', 'mit_gender'}
+    downstream_tasks = [c for c in df.columns
+                        if c not in _non_task
+                        and not c.startswith('mit_')
+                        and not c.startswith('setup_')
+                        and not c.startswith('in_')]
+
+    if debug:
+        downstream_tasks = ['feat_sleep', 'feat_generalized slowing',
+                            'feat_posterior dominant rhythm', 'feat_diffuse beta']
+
+    # Load bad H5 file list
+    bad_files = set()
+    if os.path.exists(_BAD_H5_FILES):
+        with open(_BAD_H5_FILES) as f:
+            bad_files = {line.strip().split('/')[-1] for line in f if line.strip()}
+
+    # Scan EEG directory and build split lists
+    df_index = set(df.index)
+    filename_to_session = {}
+    train_filenames, val_filenames = [], []
+    for item in sorted(os.listdir(eeg_data_dir)):
+        if not item.endswith('.h5') or item in bad_files:
+            continue
+        parts = item.split('_')
+        session_key = parts[0] + '_' + parts[1]
+        if session_key not in df_index:
+            continue
+        filename_to_session[item] = session_key
+        split = df.loc[session_key, 'split']
+        if split == 'train':
+            train_filenames.append(item)
+        elif split == 'val':
+            val_filenames.append(item)
+
+    print(f"Train length: {len(train_filenames)}  Val length: {len(val_filenames)}")
+
+    def get_labels(filenames):
+        keys = [filename_to_session[f] for f in filenames]
+        block = df.loc[keys, downstream_tasks]
+        arr = block.apply(pd.to_numeric, errors='coerce').fillna(-1).astype(np.float32).values
+        return torch.tensor(arr)
+
+    return train_filenames, val_filenames, downstream_tasks, get_labels
 
 
 # ---------------------------------------------------------------------------
@@ -412,24 +487,24 @@ def main(args):
             x, y = x.to(device), y.to(device)
         return x, y
 
-    # Labels and file splits
+    # Labels and file splits — loaded directly from CSV, no matching step
     if master_process:
-        print("Loading ProbeLabelHunterV3 ...")
-    labels = ProbeLabelHunterV3(EEG_DATA_DIR, debug=args.debug,
-                                overwrite=False, paper_version=True)
-    downstream_tasks = labels.downstream_tasks
+        print("Loading labels from CSV ...")
+    train_filenames, val_filenames, downstream_tasks, get_labels = load_label_data(
+        eeg_data_dir=EEG_DATA_DIR, debug=args.debug,
+    )
     if master_process:
         print(f"{len(downstream_tasks)} tasks: {downstream_tasks[:5]} ...")
 
-    train_labels = labels.get_labels(labels.train_filenames)
-    val_labels = labels.get_labels(labels.val_filenames)
+    train_labels = get_labels(train_filenames)
+    val_labels   = get_labels(val_filenames)
 
     train_dataset = SafeDataset(InternalInstructDataset(
-        labels.train_filenames, train_labels, downstream_tasks,
+        train_filenames, train_labels, downstream_tasks,
         eeg_data_dir=EEG_DATA_DIR, mode='train', seed=args.seed,
     ))
     val_dataset = SafeDataset(InternalInstructDataset(
-        labels.val_filenames, val_labels, downstream_tasks,
+        val_filenames, val_labels, downstream_tasks,
         eeg_data_dir=EEG_DATA_DIR, mode='val', seed=args.seed,
     ))
     if master_process:
@@ -461,8 +536,12 @@ def main(args):
                       block_size=args.block_size, bias=False,
                       vocab_size=50257, dropout=0.0)
 
-    resume_path = os.path.join(checkpoint_out_dir, 'ckpt.pt')
-    if os.path.exists(resume_path):
+    _resume_candidates = ['ckpt_final.pt', 'ckpt_b.pt', 'ckpt_a.pt']
+    resume_path = next(
+        (os.path.join(checkpoint_out_dir, n) for n in _resume_candidates
+         if os.path.exists(os.path.join(checkpoint_out_dir, n))), None
+    )
+    if resume_path:
         if master_process:
             print(f"Resuming from {resume_path}")
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
@@ -473,6 +552,8 @@ def main(args):
         _load_state_dict(model, checkpoint['model'])
         iter_num = checkpoint['iter_num']
         start_epoch = checkpoint['epoch'] + 1
+        if master_process:
+            print(f"Resuming from epoch {checkpoint['epoch']+1}")
     else:
         if master_process:
             print(f"Loading pretrained NeuroLM from {args.neurolm_path}")
@@ -489,7 +570,7 @@ def main(args):
     optimizer = model.configure_optimizers(
         args.weight_decay, args.learning_rate, (args.beta1, args.beta2), device_type,
     )
-    if os.path.exists(resume_path):
+    if resume_path:
         optimizer.load_state_dict(checkpoint['optimizer'])
     checkpoint = None  # free memory
 
@@ -634,7 +715,7 @@ def get_args():
     p.add_argument('--neurolm_path', required=True,
                    help='Path to pretrained NeuroLM .pt checkpoint (stage-2 output)')
     p.add_argument('--debug', default=False, action='store_true',
-                   help='debug=True for ProbeLabelHunterV3 (fewer tasks/files)')
+                   help='Use only 4 feat_ tasks (faster debugging)')
     p.add_argument('--name', default='', type=str,
                    help='Optional prefix for the experiment folder name')
     p.add_argument('--log_interval', default=10, type=int)
