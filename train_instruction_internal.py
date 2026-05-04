@@ -36,10 +36,10 @@ CHANNEL_ORDER = ['o1', 'o2', 't6', 'p4', 'pz', 'p3', 't5', 't3',
 CHANNEL_ORDER_UPPER = [ch.upper() for ch in CHANNEL_ORDER]
 
 FS = 200
-WINDOW_SECONDS = 30
+WINDOW_SECONDS = 4
 WINDOW_SAMPLES = WINDOW_SECONDS * FS   # 6000
 NUM_CHANS = len(CHANNEL_ORDER)         # 19
-NUM_TIME = WINDOW_SECONDS              # 30
+NUM_TIME = WINDOW_SECONDS              # 4
 EEG_MAX_LEN = NUM_TIME * NUM_CHANS     # 570
 TEXT_MAX_LEN = 80
 PATCH_SIZE = 200                       # samples per EEG patch (1 second at 200 Hz)
