@@ -473,7 +473,7 @@ def main(args):
     if os.path.exists(resume_path):
         if master_process:
             print(f"Resuming from {resume_path}")
-        checkpoint = torch.load(resume_path, map_location=device)
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
             model_args[k] = checkpoint['model_args'][k]
         gptconf = GPTConfig(**model_args)
@@ -653,7 +653,7 @@ def get_args():
     p.add_argument('--eeg_batch_size', default=64, type=int)
     p.add_argument('--text_batch_size', default=16, type=int)
     p.add_argument('--epochs', default=100, type=int)
-    p.add_argument('--warmup_epochs', default=1, type=int)
+    p.add_argument('--warmup_epochs', default=5, type=int)
     p.add_argument('--warmup_ratio', default=0.1, type=float)
     p.add_argument('--block_size', default=1024, type=int)
     # Optimiser
