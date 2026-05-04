@@ -465,7 +465,7 @@ class TUSLLoader(Dataset):
     def __getitem__(self, index):
         sample = pickle.load(open(os.path.join(self.root, self.files[index]), "rb"))
         X = sample["X"]
-        Y = int(sample["y"])
+        Y = int(np.asarray(sample["y"]).flat[0])
 
         data = torch.FloatTensor(X / 100)
         time = data.size(1) // 200
@@ -559,7 +559,7 @@ class HMCLoader(Dataset):
     def __getitem__(self, index):
         sample = pickle.load(open(os.path.join(self.root, self.files[index]), "rb"))
         X = sample["X"]
-        Y = int(sample["y"])
+        Y = int(np.asarray(sample["y"]).flat[0])
 
         data = torch.FloatTensor(X / 100)
         time = data.size(1) // 200
@@ -650,7 +650,7 @@ class WorkloadLoader(Dataset):
     def __getitem__(self, index):
         sample = pickle.load(open(os.path.join(self.root, self.files[index]), "rb"))
         X = sample["X"]
-        Y = int(sample["y"])
+        Y = int(np.asarray(sample["y"]).flat[0])
 
         data = torch.FloatTensor(X / 100)
         time = data.size(1) // 200
