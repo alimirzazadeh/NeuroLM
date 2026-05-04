@@ -62,13 +62,14 @@ def load_label_data(eeg_data_dir=EEG_DATA_DIR, debug=False):
       train_filenames, val_filenames, downstream_tasks, get_labels(filenames)
     Labels are 0/1 as-is — no matching step, so no -1 for unmatched controls.
     """
-    reports = pd.read_csv(os.path.join(_TAMING_DATA, 'reports_benchmark_downstream.csv'))
-    ehr = pd.read_csv(os.path.join(_TAMING_DATA, 'patient_train_val_test_split.csv'))
+    reports = pd.read_csv(os.path.join(_TAMING_DATA, 'reports_benchmark_downstream.csv'), low_memory=False)
+    ehr = pd.read_csv(os.path.join(_TAMING_DATA, 'patient_train_val_test_split.csv'), low_memory=False)
 
-    # Keep only med_/dis_ label cols + join key + split/size flags from EHR
+    # Both CSVs share metadata cols (split, in_large, mit_gender, etc.) — keep only
+    # the dis_*/med_* labels and the join key from EHR to avoid column collisions.
     ehr_keep = [c for c in ehr.columns
                 if c.startswith('med_') or c.startswith('dis_')
-                or c in ('BDSPPatientID', 'split', 'in_large', 'in_medium', 'mit_gender')]
+                or c == 'BDSPPatientID']
     ehr = ehr[ehr_keep]
 
     df = reports.merge(ehr, on='BDSPPatientID', how='left')
