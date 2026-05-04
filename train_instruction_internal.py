@@ -451,7 +451,8 @@ def main(args):
     else:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    exp_dir = os.path.join(args.out_dir, f'exp_{timestamp}')
+    prefix = f'{args.name}_' if args.name else ''
+    exp_dir = os.path.join(args.out_dir, f'{prefix}exp_{timestamp}')
     checkpoint_out_dir = os.path.join(exp_dir, 'checkpoints')
     if master_process:
         os.makedirs(checkpoint_out_dir, exist_ok=True)
@@ -710,6 +711,8 @@ def get_args():
                    help='Path to pretrained NeuroLM .pt checkpoint (stage-2 output)')
     p.add_argument('--debug', default=False, action='store_true',
                    help='debug=True for ProbeLabelHunterV3 (fewer tasks/files)')
+    p.add_argument('--name', default='', type=str,
+                   help='Optional prefix for the experiment folder name')
     p.add_argument('--log_interval', default=10, type=int)
     p.add_argument('--verbose', default=False, action='store_true',
                    help='Print a decoded sample question at each log interval')
