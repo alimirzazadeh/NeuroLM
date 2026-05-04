@@ -7,11 +7,13 @@ import os
 import time
 import argparse
 from contextlib import nullcontext
+from datetime import datetime
 
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from torch.utils.tensorboard import SummaryWriter
 
 from model.model_neurolm import NeuroLM
 from model.model import GPTConfig
@@ -21,6 +23,9 @@ from utils import prepare_TUAB_dataset, prepare_TUEV_dataset, prepare_TUSL_datas
 from downstream_dataset import SEEDDataset
 from torch.utils.data.dataset import ConcatDataset
 
+
+EXT_DATA  = '/orcd/compute/dinaktbi/001/2026/EEG_FM/EXTERNAL_DATASETS'
+TEXT_DATA = '/orcd/compute/dinaktbi/001/2026/EEG_FM/text'
 
 master_process = None; device = None; dtype = None
 ctx = None; ddp_rank = None; device_type = None
@@ -61,58 +66,45 @@ def init(args):
 
 def get_instruct_datasets(args, downstream_dataset: str, eeg_max_len=-1, text_max_len=-1):
         dataset_info = {'name': downstream_dataset}
-        if downstream_dataset == 'SEED':
-            dataset_train = SEEDDataset(Path(args.dataset_dir, 'h5data/seed-3.hdf5'), window_size=800, stride_size=800, trial_start_percentage=0, 
-                                        trial_end_percentage=0.6, is_instruct=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-            dataset_val = SEEDDataset(Path(args.dataset_dir, 'h5data/seed-3.hdf5'), window_size=800, stride_size=800, trial_start_percentage=0.6, 
-                                    trial_end_percentage=0.8, is_instruct=True, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-            dataset_test = SEEDDataset(Path(args.dataset_dir, 'h5data/seed-3.hdf5'), window_size=800, stride_size=800, trial_start_percentage=0.8, 
-                                    trial_end_percentage=1, is_instruct=True, is_val=True, eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-            
-            dataset_info['metrics'] = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted"]
-            dataset_info['is_binary'] = False
-            dataset_info['num_classes'] = 3
-            dataset_info['result_idx'] = 11
-            dataset_info['label_dic'] = {'Positive': 0, 'Neutral': 1, 'Negative': 2}
-        elif downstream_dataset == 'TUAB':
-            dataset_train, dataset_test, dataset_val = prepare_TUAB_dataset(Path(args.dataset_dir, 'TUAB/processed'), is_instruct=True, 
-                                                                            eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-
+        if downstream_dataset == 'TUAB':
+            dataset_train, dataset_test, dataset_val = prepare_TUAB_dataset(
+                Path(EXT_DATA, 'TUAB/neurolm'), is_instruct=True,
+                eeg_max_len=eeg_max_len, text_max_len=text_max_len)
             dataset_info['metrics'] = ["pr_auc", "roc_auc", "accuracy", "balanced_accuracy"]
             dataset_info['is_binary'] = True
             dataset_info['result_idx'] = 7
             dataset_info['label_dic'] = {'Yes': 1, 'No': 0}
         elif downstream_dataset == 'TUEV':
-            dataset_train, dataset_test, dataset_val = prepare_TUEV_dataset(Path(args.dataset_dir, 'TUEV'), is_instruct=True, 
-                                                                            eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-
+            dataset_train, dataset_test, dataset_val = prepare_TUEV_dataset(
+                Path(EXT_DATA, 'TUEV/neurolm'), is_instruct=True,
+                eeg_max_len=eeg_max_len, text_max_len=text_max_len)
             dataset_info['metrics'] = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted"]
             dataset_info['is_binary'] = False
             dataset_info['num_classes'] = 6
             dataset_info['result_idx'] = 34
             dataset_info['label_dic'] = {'(A)': 0, '(B)': 1, '(C)': 2, '(D)': 3, '(E)': 4, '(F)': 5}
         elif downstream_dataset == 'TUSL':
-            dataset_train, dataset_test, dataset_val = prepare_TUSL_dataset(Path(args.dataset_dir, 'TUSL'), is_instruct=True, 
-                                                                            eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-
+            dataset_train, dataset_test, dataset_val = prepare_TUSL_dataset(
+                Path(EXT_DATA, 'TUSL/neurolm'), is_instruct=True,
+                eeg_max_len=eeg_max_len, text_max_len=text_max_len)
             dataset_info['metrics'] = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted"]
             dataset_info['is_binary'] = False
             dataset_info['num_classes'] = 3
             dataset_info['result_idx'] = 17
             dataset_info['label_dic'] = {'(A)': 0, '(B)': 1, '(C)': 2}
         elif downstream_dataset == 'HMC':
-            dataset_train, dataset_test, dataset_val = prepare_HMC_dataset(Path(args.dataset_dir, 'HMC'), is_instruct=True, 
-                                                                            eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-
+            dataset_train, dataset_test, dataset_val = prepare_HMC_dataset(
+                Path(EXT_DATA, 'HMC/neurolm'), is_instruct=True,
+                eeg_max_len=eeg_max_len, text_max_len=text_max_len)
             dataset_info['metrics'] = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted"]
             dataset_info['is_binary'] = False
             dataset_info['num_classes'] = 5
             dataset_info['result_idx'] = 22
             dataset_info['label_dic'] = {'(A)': 0, '(B)': 1, '(C)': 2, '(D)': 3, '(E)': 4}
         elif downstream_dataset == 'Workload':
-            dataset_train, dataset_test, dataset_val = prepare_Workload_dataset(Path(args.dataset_dir, 'EEGWorkload'), is_instruct=True, 
-                                                                            eeg_max_len=eeg_max_len, text_max_len=text_max_len)
-
+            dataset_train, dataset_test, dataset_val = prepare_Workload_dataset(
+                Path(EXT_DATA, 'WORKLOAD/neurolm'), is_instruct=True,
+                eeg_max_len=eeg_max_len, text_max_len=text_max_len)
             dataset_info['metrics'] = ["pr_auc", "roc_auc", "accuracy", "balanced_accuracy"]
             dataset_info['is_binary'] = True
             dataset_info['result_idx'] = 9
@@ -185,19 +177,29 @@ def main(args):
 
     init(args)
 
-    checkpoint_out_dir = os.path.join(args.out_dir, 'checkpoints/instruction-B')
+    # Timestamped experiment directory — unique per run, never overwritten
+    if ddp:
+        ts_list = [datetime.now().strftime('%Y%m%d_%H%M%S') if master_process else None]
+        torch.distributed.broadcast_object_list(ts_list, src=0)
+        timestamp = ts_list[0]
+    else:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    prefix = f'{args.name}_' if args.name else ''
+    exp_dir = os.path.join(args.out_dir, f'{prefix}exp_{timestamp}')
+    checkpoint_out_dir = os.path.join(exp_dir, 'checkpoints')
     if master_process:
         os.makedirs(checkpoint_out_dir, exist_ok=True)
+        print(f"Experiment dir: {exp_dir}")
+
+    writer = None
+    if master_process:
+        writer = SummaryWriter(os.path.join(exp_dir, 'runs'))
 
     # text data loader
-    data_dir = os.path.join(args.out_dir, 'text')
     def get_batch(split):
-        # We recreate np.memmap every batch to avoid a memory leak, as per
-        # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-        if split == 'train':
-            data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-        else:
-            data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+        fname = 'train.bin' if split == 'train' else 'val.bin'
+        data = np.memmap(os.path.join(TEXT_DATA, fname), dtype=np.uint16, mode='r')
         ix = torch.randint(len(data) - args.block_size, (args.text_batch_size,))
         x = torch.stack([torch.from_numpy((data[i:i + args.block_size]).astype(np.int64)) for i in ix])
         y = torch.stack([torch.from_numpy((data[i + 1:i + 1 + args.block_size]).astype(np.int64)) for i in ix])
@@ -210,7 +212,7 @@ def main(args):
 
     concat_datasets = True
     all_datasets = []
-    for name in ['TUAB', 'TUEV', 'SEED', 'HMC', 'Workload', 'TUSL']:
+    for name in ['TUAB', 'TUEV', 'HMC', 'Workload', 'TUSL']:
         all_datasets.append(get_instruct_datasets(args, name, eeg_max_len=276, text_max_len=80))
     if concat_datasets:
         merge_datasets = ConcatDataset([dataset_info['dataset_train'] for dataset_info in all_datasets])
@@ -287,7 +289,7 @@ def main(args):
     elif init_from == 'pretrained':
         print(f"Initializing training from {args.NeuroLM_path}")
         # resume training from a checkpoint.
-        ckpt_path = os.path.join(args.out_dir, args.NeuroLM_path)
+        ckpt_path = args.NeuroLM_path
         checkpoint = torch.load(ckpt_path, map_location=device)
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
@@ -407,67 +409,83 @@ def main(args):
                 
                 X_text2, Y_text2 = get_batch('train')
 
-                # evaluate the loss on train/val sets and write checkpoints
+                # logging
                 if (iter_num + 1) % args.log_interval == 0 and master_process:
-                    print(f"epoch {epoch} step [{step + 1}/{num_training_steps_per_epoch}]: train total loss {log1['train/loss'] + log2['train/loss']:.4f}, instruction loss {log1['train/loss']:.4f}, text loss {log2['train/loss']:.4f}")
+                    instr_loss = log1['train/loss']
+                    text_loss = log2['train/loss']
+                    instr_acc = log1.get('train/accuracy', float('nan'))
+                    t1 = time.time()
+                    print(f"epoch {epoch} step [{step + 1}/{num_training_steps_per_epoch}]  "
+                          f"total={instr_loss + text_loss:.4f}  instr={instr_loss:.4f}  "
+                          f"text={text_loss:.4f}  acc={instr_acc:.3f}  lr={lr:.2e}  "
+                          f"dt={(t1 - t0) * 1000:.0f}ms")
+                    t0 = t1
+                    writer.add_scalar('train/total_loss', instr_loss + text_loss, iter_num)
+                    writer.add_scalar('train/instruction_loss', instr_loss, iter_num)
+                    writer.add_scalar('train/text_loss', text_loss, iter_num)
+                    writer.add_scalar('train/instruction_accuracy', instr_acc, iter_num)
+                    writer.add_scalar('train/lr', lr, iter_num)
                     if args.wandb_log:
-                        log = {
-                            "train/total_loss": log1['train/loss']  + log2['train/loss'] ,
-                            "train/instruction_loss": log1['train/loss'],
-                            "train/text_loss": log2['train/loss'],
-                            "train/instruction_accuracy": log1['train/accuracy'],
-                            "train/text_accuracy": log2['train/accuracy'],
-                            "lr": lr
-                        }
-                        wandb.log(log)
+                        wandb.log({
+                            "train/total_loss": instr_loss + text_loss,
+                            "train/instruction_loss": instr_loss,
+                            "train/text_loss": text_loss,
+                            "train/instruction_accuracy": instr_acc,
+                            "lr": lr,
+                        })
 
                 if iter_num == 0 and args.eval_only:
                     break
 
-                # timing and logging
-                t1 = time.time()
-                dt = t1 - t0
-                t0 = t1
                 iter_num += 1
                 local_iter_num += 1
         
         if master_process and (not args.eval_only):
-            checkpoint = {
+            ckpt = {
                 'model': raw_model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'model_args': model_args,
                 'iter_num': iter_num,
-                'epoch': epoch
+                'epoch': epoch,
             }
-            print(f"saving checkpoint to {checkpoint_out_dir}")
-            torch.save(checkpoint, os.path.join(checkpoint_out_dir, f'ckpt.pt'))
-            if (epoch + 1) % args.save_ckpt_freq == 0:
-                print(f"saving checkpoint to {checkpoint_out_dir}")
-                torch.save(checkpoint, os.path.join(checkpoint_out_dir, f'ckpt-{epoch}.pt'))
+            is_final = (epoch == args.epochs - 1)
+            if epoch % 2 == 0 or is_final:
+                if is_final:
+                    path = os.path.join(checkpoint_out_dir, 'ckpt_final.pt')
+                else:
+                    slot = 'ckpt_a.pt' if (epoch // 2) % 2 == 0 else 'ckpt_b.pt'
+                    path = os.path.join(checkpoint_out_dir, slot)
+                torch.save(ckpt, path)
+                print(f"Checkpoint saved to {path}")
         
         # validation and test
         for dataset_info in all_datasets:
-            print('Dataset:', dataset_info['name'])
+            dname = dataset_info['name']
+            print(f'Dataset: {dname}')
             results_val = evaluate(raw_model, dataset_info, dataset_info['data_loader_val'], decode)
-            print('=' * 10)
             print('Eval:')
-            for metric in results_val.keys():
-                print(metric + ':', results_val[metric])
+            for metric, val in results_val.items():
+                print(f'  {metric}: {val}')
+                if master_process and writer is not None:
+                    writer.add_scalar(f'val_{dname}/{metric}', val, iter_num)
             results_test = evaluate(raw_model, dataset_info, dataset_info['data_loader_test'], decode)
-            print('=' * 10)
             print('Test:')
-            for metric in results_test.keys():
-                print(metric + ':', results_test[metric])
+            for metric, val in results_test.items():
+                print(f'  {metric}: {val}')
+                if master_process and writer is not None:
+                    writer.add_scalar(f'test_{dname}/{metric}', val, iter_num)
             print('=' * 10)
             if args.wandb_log and master_process:
                 log = {}
                 for metric in results_val.keys():
-                    log['val_' + dataset_info['name'] + '/' + metric] = results_val[metric]
-                    log[f'test_' + dataset_info['name'] + '/' + metric] = results_test[metric]
+                    log[f'val_{dname}/{metric}'] = results_val[metric]
+                    log[f'test_{dname}/{metric}'] = results_test[metric]
                 wandb.log(log)
         if args.eval_only:
             break
 
+    if writer is not None:
+        writer.close()
     if ddp:
         destroy_process_group()
 
@@ -527,10 +545,10 @@ def evaluate(model, dataset_info, dataloader, decode):
 
 def get_args():
     parser = argparse.ArgumentParser('VQ training script', add_help=False)
-    parser.add_argument('--out_dir', default='./', help='path where to save, empty for no saving')
-    parser.add_argument('--dataset_dir', default='./', help='path where to save, empty for no saving')
-    parser.add_argument('--tokenizer_path', default='checkpoints/VQ.py', help='path where tokenizer is')
-    parser.add_argument('--NeuroLM_path', default='checkpoints/NeuroLM-B.pt', help='path where NeuroLM model is')
+    parser.add_argument('--out_dir', default='./')
+    parser.add_argument('--name', default='', type=str, help='Optional prefix for experiment folder name')
+    parser.add_argument('--tokenizer_path', default='checkpoints/VQ.py')
+    parser.add_argument('--NeuroLM_path', default='/home/alimirz/2026/neurolm/NeuroLM-B.pt')
     parser.add_argument('--log_interval', default=10, type=int)
     parser.add_argument('--eval_only', default=False, action='store_true')
     parser.add_argument('--wandb_log', default=False, action='store_true')
