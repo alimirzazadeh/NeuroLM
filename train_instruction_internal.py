@@ -3,7 +3,6 @@ import sys
 import time
 import argparse
 from contextlib import nullcontext
-from datetime import datetime
 
 import h5py
 import numpy as np
@@ -384,15 +383,8 @@ def main(args):
     init(args)
 
     # Timestamped experiment directory — unique per run, never overwritten
-    if ddp:
-        ts_list = [datetime.now().strftime('%Y%m%d_%H%M%S') if master_process else None]
-        torch.distributed.broadcast_object_list(ts_list, src=0)
-        timestamp = ts_list[0]
-    else:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-
     prefix = f'{args.name}_' if args.name else ''
-    exp_dir = os.path.join(args.out_dir, f'{prefix}exp_{timestamp}')
+    exp_dir = os.path.join(args.out_dir, f'{prefix}exp')
     checkpoint_out_dir = os.path.join(exp_dir, 'checkpoints')
     if master_process:
         os.makedirs(checkpoint_out_dir, exist_ok=True)
