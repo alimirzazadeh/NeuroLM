@@ -62,7 +62,7 @@ ddp = None; ddp_world_size = None; ddp_local_rank = None
 # Label loading via ProbeLabelHunterV2 (propensity-score matched per task)
 # ---------------------------------------------------------------------------
 
-def load_label_data(eeg_data_dir=EEG_DATA_DIR, debug=False):
+def load_label_data(eeg_data_dir=EEG_DATA_DIR, debug=False, feat_only=False):
     """
     Use ProbeLabelHunterV2 to get propensity-score-matched labels per task.
     Labels are:  1 = positive,  0 = matched negative,  -1 = excluded.
@@ -74,6 +74,8 @@ def load_label_data(eeg_data_dir=EEG_DATA_DIR, debug=False):
     if debug:
         downstream_tasks = ['feat_sleep', 'feat_generalized slowing',
                             'feat_posterior dominant rhythm', 'feat_diffuse beta']
+    elif feat_only:
+        downstream_tasks = [t for t in downstream_tasks if t.startswith('feat_')]
 
     sessions_dict = hunter.sessions_patient_dict  # h5 filename → composite key
 
@@ -450,7 +452,7 @@ def main(args):
     if master_process:
         print("Loading labels via ProbeLabelHunterV2 ...")
     train_filenames, val_filenames, downstream_tasks, get_labels = load_label_data(
-        eeg_data_dir=EEG_DATA_DIR, debug=args.debug,
+        eeg_data_dir=EEG_DATA_DIR, debug=args.debug, feat_only=args.feat_only,
     )
     if master_process:
         print(f"{len(downstream_tasks)} tasks: {downstream_tasks[:5]} ...")
@@ -696,6 +698,8 @@ def get_args():
                    help='Path to pretrained NeuroLM .pt checkpoint (stage-2 output)')
     p.add_argument('--debug', default=False, action='store_true',
                    help='Use only 4 feat_ tasks (faster debugging)')
+    p.add_argument('--feat_only', default=False, action='store_true',
+                   help='Restrict tasks to feat_* (EEG-feature tasks only, excludes med/dis)')
     p.add_argument('--name', default='', type=str,
                    help='Optional prefix for the experiment folder name')
     p.add_argument('--log_interval', default=10, type=int)
