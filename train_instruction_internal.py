@@ -418,6 +418,18 @@ def main(args):
 
     init(args)
 
+    # Recompute window-dependent globals from --window_seconds
+    global WINDOW_SECONDS, WINDOW_SAMPLES, NUM_TIME, EEG_MAX_LEN, _CHAN_INDICES, _TIME_INDICES
+    WINDOW_SECONDS = args.window_seconds
+    WINDOW_SAMPLES = WINDOW_SECONDS * FS
+    NUM_TIME       = WINDOW_SECONDS
+    EEG_MAX_LEN    = NUM_TIME * NUM_CHANS
+    _CHAN_INDICES   = [standard_1020.index(ch) for ch in CHANNEL_ORDER_UPPER] * NUM_TIME
+    _TIME_INDICES   = [t for t in range(NUM_TIME) for _ in range(NUM_CHANS)]
+    if master_process:
+        print(f"Window: {WINDOW_SECONDS}s  →  {EEG_MAX_LEN} EEG tokens  "
+              f"(block: {EEG_MAX_LEN + TEXT_MAX_LEN} total)")
+
     # Timestamped experiment directory — unique per run, never overwritten
     prefix = f'{args.name}_' if args.name else ''
     exp_dir = os.path.join(args.out_dir, f'{prefix}exp')
@@ -700,6 +712,9 @@ def get_args():
                    help='Use only 4 feat_ tasks (faster debugging)')
     p.add_argument('--feat_only', default=False, action='store_true',
                    help='Restrict tasks to feat_* (EEG-feature tasks only, excludes med/dis)')
+    p.add_argument('--window_seconds', default=10, type=int,
+                   help='EEG window length in seconds (default 10 to match public-dataset instruction tuning; '
+                        'increase to 30 to match pretraining; 4 is too short for most EEG features)')
     p.add_argument('--name', default='', type=str,
                    help='Optional prefix for the experiment folder name')
     p.add_argument('--log_interval', default=10, type=int)
