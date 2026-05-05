@@ -25,9 +25,15 @@ from utils import cosine_scheduler
 # Constants
 # ---------------------------------------------------------------------------
 
-EEG_DATA_DIR  = '/orcd/compute/dinaktbi/001/2026/EEG_FM/preprocessed_eeg_v2'
-_TAMING_DATA  = '/home/alimirz/2026/EEG_FM/EEG_FM/taming-transformers/data'
-_BAD_H5_FILES = '/home/alimirz/2026/EEG_FM/EEG_FM/data_split_scripts/bad_h5_files.txt'
+EEG_DATA_DIR       = '/orcd/compute/dinaktbi/001/2026/EEG_FM/preprocessed_eeg_v2'
+_TAMING_DATA       = '/home/alimirz/2026/EEG_FM/EEG_FM/taming-transformers/data'
+_BAD_H5_FILES      = '/home/alimirz/2026/EEG_FM/EEG_FM/data_split_scripts/bad_h5_files.txt'
+_DATA_SPLIT_SCRIPTS = '/home/alimirz/2026/EEG_FM/EEG_FM/data_split_scripts'
+
+# ProbeLabelHunterV2 lives outside this repo — add its directory to the path
+if _DATA_SPLIT_SCRIPTS not in sys.path:
+    sys.path.insert(0, _DATA_SPLIT_SCRIPTS)
+from probe_label_hunter import ProbeLabelHunterV2
 
 # 19-channel order used by preprocessed_eeg_v2 (lowercase, as stored in H5)
 CHANNEL_ORDER = ['o1', 'o2', 't6', 'p4', 'pz', 'p3', 't5', 't3',
@@ -53,79 +59,31 @@ ddp = None; ddp_world_size = None; ddp_local_rank = None
 
 
 # ---------------------------------------------------------------------------
-# Label loading (direct CSV, no propensity-score matching)
+# Label loading via ProbeLabelHunterV2 (propensity-score matched per task)
 # ---------------------------------------------------------------------------
 
 def load_label_data(eeg_data_dir=EEG_DATA_DIR, debug=False):
     """
-    Merge reports + EHR CSVs, scan EEG dir, return:
-      train_filenames, val_filenames, downstream_tasks, get_labels(filenames)
-    Labels are 0/1 as-is — no matching step, so no -1 for unmatched controls.
+    Use ProbeLabelHunterV2 to get propensity-score-matched labels per task.
+    Labels are:  1 = positive,  0 = matched negative,  -1 = excluded.
+    Returns: train_filenames, val_filenames, downstream_tasks, get_labels(filenames)
     """
-    reports = pd.read_csv(os.path.join(_TAMING_DATA, 'reports_benchmark_downstream.csv'), low_memory=False)
-    ehr = pd.read_csv(os.path.join(_TAMING_DATA, 'patient_train_val_test_split.csv'), low_memory=False)
+    hunter = ProbeLabelHunterV2(eeg_data_dir, size='large', debug=debug)
 
-    # Both CSVs share metadata cols (split, in_large, mit_gender, etc.) — keep only
-    # the dis_*/med_* labels and the join key from EHR to avoid column collisions.
-    ehr_keep = [c for c in ehr.columns
-                if c.startswith('med_') or c.startswith('dis_')
-                or c == 'BDSPPatientID']
-    ehr = ehr[ehr_keep]
-
-    df = reports.merge(ehr, on='BDSPPatientID', how='left')
-    df.set_index('filename', inplace=True)
-    df = df[~df.index.duplicated(keep='first')]  # deduplicate session keys
-
-    # Filter to in_large sessions with valid gender
-    df = df[df['mit_gender'] != -1]
-    df = df[df['in_large'].astype(bool)]
-
-    # Task columns: everything that isn't metadata
-    _non_task = {'BDSPPatientID', 'split', 'fold', 'SiteID', 'SessionID',
-                 'report_filename', 'filename', 'in_large', 'in_medium', 'mit_gender'}
-    downstream_tasks = [c for c in df.columns
-                        if c not in _non_task
-                        and not c.startswith('mit_')
-                        and not c.startswith('setup_')
-                        and not c.startswith('in_')]
-
+    downstream_tasks = list(hunter.downstream_tasks)
     if debug:
         downstream_tasks = ['feat_sleep', 'feat_generalized slowing',
                             'feat_posterior dominant rhythm', 'feat_diffuse beta']
 
-    # Load bad H5 file list
-    bad_files = set()
-    if os.path.exists(_BAD_H5_FILES):
-        with open(_BAD_H5_FILES) as f:
-            bad_files = {line.strip().split('/')[-1] for line in f if line.strip()}
-
-    # Scan EEG directory and build split lists
-    df_index = set(df.index)
-    filename_to_session = {}
-    train_filenames, val_filenames = [], []
-    for item in sorted(os.listdir(eeg_data_dir)):
-        if not item.endswith('.h5') or item in bad_files:
-            continue
-        parts = item.split('_')
-        session_key = parts[0] + '_' + parts[1]
-        if session_key not in df_index:
-            continue
-        filename_to_session[item] = session_key
-        split = df.loc[session_key, 'split']
-        if split == 'train':
-            train_filenames.append(item)
-        elif split == 'val':
-            val_filenames.append(item)
-
-    print(f"Train length: {len(train_filenames)}  Val length: {len(val_filenames)}")
+    sessions_dict = hunter.sessions_patient_dict  # h5 filename → composite key
 
     def get_labels(filenames):
-        keys = [filename_to_session[f] for f in filenames]
-        block = df.loc[keys, downstream_tasks]
+        keys = [sessions_dict[f] for f in filenames]
+        block = hunter.matched_dfs.loc[keys, downstream_tasks]
         arr = block.apply(pd.to_numeric, errors='coerce').fillna(-1).astype(np.float32).values
         return torch.tensor(arr)
 
-    return train_filenames, val_filenames, downstream_tasks, get_labels
+    return hunter.train_filenames, hunter.val_filenames, downstream_tasks, get_labels
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +291,7 @@ class InternalInstructDataset(Dataset):
             X_eeg = self._load_eeg_window(file_idx, offset)
             X_text, Y_text = self._build_train_text(task_name, label)
             gpt_mask = self._build_gpt_mask(TEXT_MAX_LEN)
-            return X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask
+            return X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask, task_idx, label
 
         else:
             file_idx = idx
@@ -360,7 +318,7 @@ class InternalInstructDataset(Dataset):
             X_eeg = self._load_eeg_window(file_idx, offset)
             X_text, Y_text = self._build_train_text(task_name, label)
             gpt_mask = self._build_gpt_mask(TEXT_MAX_LEN)
-            return X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask
+            return X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask, task_idx, label
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +366,7 @@ def evaluate(model, val_loader, get_batch, writer, global_step: int, vocab_size:
     for batch in val_loader:
         if batch is None:
             continue
-        X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask = batch
+        X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask, _task_idx, _label = batch
         X_eeg = X_eeg.float().to(device, non_blocking=True)
         X_text = X_text.to(device, non_blocking=True)
         Y_text = Y_text.to(device, non_blocking=True)
@@ -488,9 +446,9 @@ def main(args):
             x, y = x.to(device), y.to(device)
         return x, y
 
-    # Labels and file splits — loaded directly from CSV, no matching step
+    # Labels and file splits — via ProbeLabelHunterV2 (propensity-score matched)
     if master_process:
-        print("Loading labels from CSV ...")
+        print("Loading labels via ProbeLabelHunterV2 ...")
     train_filenames, val_filenames, downstream_tasks, get_labels = load_label_data(
         eeg_data_dir=EEG_DATA_DIR, debug=args.debug,
     )
@@ -591,6 +549,10 @@ def main(args):
     X_text2, Y_text2 = get_batch('train')
     t0 = time.time()
 
+    n_tasks = len(downstream_tasks)
+    task_pos_counts   = np.zeros(n_tasks, dtype=np.int64)
+    task_total_counts = np.zeros(n_tasks, dtype=np.int64)
+
     for epoch in range(start_epoch, args.epochs):
         if ddp:
             train_loader.sampler.set_epoch(epoch)
@@ -603,7 +565,13 @@ def main(args):
             for pg in optimizer.param_groups:
                 pg['lr'] = lr
 
-            X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask = batch
+            X_eeg, X_text, Y_text, input_chans, input_time, eeg_mask, gpt_mask, task_idx_batch, label_batch = batch
+
+            if master_process:
+                ti_np = task_idx_batch.numpy()
+                lb_np = label_batch.numpy()
+                np.add.at(task_total_counts, ti_np, 1)
+                np.add.at(task_pos_counts,   ti_np, (lb_np == 1).astype(np.int64))
             X_eeg = X_eeg.float().to(device, non_blocking=True)
             X_text = X_text.to(device, non_blocking=True)
             Y_text = Y_text.to(device, non_blocking=True)
@@ -662,6 +630,17 @@ def main(args):
                 t0 = t1
 
             iter_num += 1
+
+        # Per-task positive-rate summary for this epoch
+        if master_process:
+            print(f"[epoch {epoch}] task sampling stats (master process only):")
+            for i, task in enumerate(downstream_tasks):
+                total = task_total_counts[i]
+                if total > 0:
+                    pct = 100.0 * task_pos_counts[i] / total
+                    print(f"  {task}: {pct:.1f}% pos  ({task_pos_counts[i]}/{total})")
+            task_pos_counts[:]   = 0
+            task_total_counts[:] = 0
 
         # Checkpointing: every other epoch, alternating between two slots to
         # avoid accumulation; always save a final checkpoint at the last epoch.
